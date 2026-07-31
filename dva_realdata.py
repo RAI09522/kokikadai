@@ -40,7 +40,9 @@ for f in ["Noto Sans CJK JP", "IPAexGothic", "IPAGothic", "Noto Sans JP", "Takao
         break
 plt.rcParams["axes.unicode_minus"] = False
 
-OUTDIR = Path("/home/user/dva_sim/out")
+# --- 出力先: スクリプトと同じディレクトリの out/ (どの環境でも書き込み可) ---
+SCRIPT_DIR = Path(__file__).resolve().parent
+OUTDIR = SCRIPT_DIR / "out"
 OUTDIR.mkdir(parents=True, exist_ok=True)
 
 # ==============================================================
@@ -65,7 +67,6 @@ DEFAULT_TICKERS = [
     "4519.T",  # 中外製薬
     # 半導体・グロース (中〜高ボラ)
     "6857.T",  # アドバンテスト
-    "8035.T",  # 東京エレクトロン
     "6146.T",  # ディスコ
     "3659.T",  # ネクソン
     "4755.T",  # 楽天
@@ -84,7 +85,6 @@ DEFAULT_TICKERS = [
     "1321.T",  # 日経225連動ETF
     "1306.T",  # TOPIX連動ETF
 ]
-# 重複除去
 DEFAULT_TICKERS = list(dict.fromkeys(DEFAULT_TICKERS))
 
 
@@ -92,10 +92,6 @@ DEFAULT_TICKERS = list(dict.fromkeys(DEFAULT_TICKERS))
 # 1. 実データ取得
 # ==============================================================
 def fetch_prices(tickers, period="5y"):
-    """
-    yfinance で調整後終値を取得。
-    取得失敗銘柄はスキップ。
-    """
     print(f"[fetch] {len(tickers)}銘柄を取得中 (period={period}) ...")
     data = yf.download(tickers, period=period, auto_adjust=True,
                        progress=False, group_by="ticker", threads=True)
@@ -106,7 +102,7 @@ def fetch_prices(tickers, period="5y"):
                 s = data[t]["Close"].dropna()
             else:
                 s = data["Close"].dropna()
-            if len(s) < 500:   # 2年未満はスキップ
+            if len(s) < 500:
                 print(f"  ! {t}: データ不足 ({len(s)}日) → スキップ")
                 continue
             result[t] = s
@@ -117,7 +113,6 @@ def fetch_prices(tickers, period="5y"):
 
 
 def fetch_volumes(tickers, period="5y"):
-    """出来高(流動性の実測)を取得"""
     data = yf.download(tickers, period=period, auto_adjust=True,
                        progress=False, group_by="ticker", threads=True)
     vols = {}
@@ -263,7 +258,6 @@ def train_models(df):
     results = {}
     models = {}
 
-    # -- RandomForest --
     rf = RandomForestRegressor(n_estimators=400, max_depth=6,
                                random_state=42, n_jobs=-1)
     kf = KFold(n_splits=5, shuffle=True, random_state=42)
@@ -274,7 +268,6 @@ def train_models(df):
     models["RandomForest"] = rf
     results["RandomForest"] = dict(r2_cv=r2_cv, mae_cv=mae_cv)
 
-    # -- XGBoost --
     try:
         from xgboost import XGBRegressor
         xgb = XGBRegressor(n_estimators=400, max_depth=4, learning_rate=0.05,
@@ -288,7 +281,6 @@ def train_models(df):
     except Exception as e:
         print(f"  ! XGBoost 学習失敗: {e}")
 
-    # -- LightGBM --
     try:
         from lightgbm import LGBMRegressor
         lgbm = LGBMRegressor(n_estimators=400, max_depth=4, learning_rate=0.05,
@@ -302,7 +294,6 @@ def train_models(df):
     except Exception as e:
         print(f"  ! LightGBM 学習失敗: {e}")
 
-    # ベストモデル選択 (CV R²最大)
     best = max(results.keys(), key=lambda k: results[k]["r2_cv"])
     print(f"\n[model] ベストモデル = {best}  (CV R²={results[best]['r2_cv']:.3f})")
     return models, results, best, feat_cols
@@ -380,7 +371,6 @@ def plot_shap(model, X, feat_cols, outpath):
 
 
 def plot_dca_vs_va(prices_all, ranked, outpath):
-    """予測改善率トップ1銘柄 と ボトム1銘柄 の累積推移"""
     top = ranked.sort_values("pred_improvement", ascending=False).iloc[0]
     bot = ranked.sort_values("pred_improvement").iloc[0]
 
@@ -422,6 +412,7 @@ def main(period="5y", tickers=None):
 
     print("=" * 70)
     print(" DVA (Value Averaging) 改善率予測モデル — 実データ版")
+    print(f" 出力先: {OUTDIR}")
     print("=" * 70)
 
     df, prices_all = build_dataset(tickers, period=period)
@@ -453,15 +444,14 @@ def main(period="5y", tickers=None):
         print(f"  {r['ticker']:<10}{r['pred_improvement']*100:>11.2f}%"
               f"{r['improvement']*100:>11.2f}%   {r['rank']}")
 
-    # 出力ファイル
     print("\n[plots] 図を生成中...")
     plot_pred_vs_true(ranked,
                       results[best_name]["r2_cv"],
                       results[best_name]["mae_cv"],
                       OUTDIR / "fig1_pred_vs_true_real.png")
-    imp = plot_importance(best_model, feat_cols,
-                          OUTDIR / "fig2_importance_real.png",
-                          title=f"{best_name} — 特徴量重要度 (実データ)")
+    plot_importance(best_model, feat_cols,
+                    OUTDIR / "fig2_importance_real.png",
+                    title=f"{best_name} — 特徴量重要度 (実データ)")
     plot_shap(best_model, df[feat_cols].values, feat_cols,
               OUTDIR / "fig3_shap_summary_real.png")
     plot_dca_vs_va(prices_all, ranked, OUTDIR / "fig4_dca_vs_va_real.png")
@@ -478,5 +468,13 @@ if __name__ == "__main__":
                         help="取得期間 (例: 1y, 3y, 5y, 10y, max)")
     parser.add_argument("--tickers", nargs="*", default=None,
                         help="対象銘柄コード(スペース区切り, .T付き)")
+    parser.add_argument("--outdir", default=None,
+                        help="出力先ディレクトリ (省略時: スクリプトと同階層の out/)")
     args = parser.parse_args()
+
+    if args.outdir:
+        OUTDIR = Path(args.outdir).resolve()
+        OUTDIR.mkdir(parents=True, exist_ok=True)
+        print(f"[config] 出力先を上書き: {OUTDIR}")
+
     main(period=args.period, tickers=args.tickers)
