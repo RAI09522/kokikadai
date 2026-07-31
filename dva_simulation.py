@@ -15,6 +15,10 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import r2_score, mean_absolute_error
 import warnings
+# dva_simulation.py の build_dataset() 内を差し替え
+import yfinance as yf
+prices = yf.download(ticker, start="2020-01-01", end="2026-07-31")["Adj Close"]
+
 warnings.filterwarnings("ignore")
 
 RNG = np.random.default_rng(42)
